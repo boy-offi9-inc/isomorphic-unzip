@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="https://i.ibb.co/hxd66XLj/file-000000008f8081f4bd2ad19dc26151ca.png" width="480" alt="isomorphic-unzip icon" />
+  <img src="https://i.ibb.co/hxd66XLj/file-000000008f8081f4bd2ad19dc26151ca.png" width="80" alt="isomorphic-unzip icon" />
 
   # isomorphic-unzip
 
