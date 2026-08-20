@@ -4,7 +4,7 @@
   # isomorphic-unzip
 
   [![npm version](https://img.shields.io/npm/v/%40boy-offi9-inc%2Fisomorphic-unzip.svg)](https://www.npmjs.com/package/@boy-offi9-inc/isomorphic-unzip)
-  [![npm downloads](https://img.shields.io/npm/dm/%40boy-offi9-inc%2Fisomorphic-unzip.svg)](https://www.npmjs.com/package/@boy-offi9-inc/isomorphic-unzip)
+  [![types](https://img.shields.io/badge/types-included-blue.svg)](https://github.com/boy-offi9-inc/isomorphic-unzip)
   [![license](https://img.shields.io/npm/l/%40boy-offi9-inc%2Fisomorphic-unzip.svg)](./LICENSE)
   [![node engine](https://img.shields.io/node/v/%40boy-offi9-inc%2Fisomorphic-unzip.svg)](./package.json)
 </div>
