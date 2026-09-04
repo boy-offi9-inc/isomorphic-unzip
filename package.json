@@ -1,6 +1,6 @@
 {
   "name": "@boy-offi9-inc/isomorphic-unzip",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Maintained drop-in replacement for the abandoned isomorphic-unzip — same API (getBuffer, string/RegExp/function matching), powered internally by fflate instead of a yauzl+zip.js split that never actually reached parity between Node and browser.",
   "main": "./src/index.js",
   "types": "./types/index.d.ts",

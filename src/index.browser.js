@@ -1,4 +1,4 @@
-const { createUnzipClass } = require("./core");
+const { createUnzipClass, zipEntries, zipEntriesAsync } = require("./core");
 const { readPath } = require("./platform-browser");
 
 // This entry point never requires "fs" — not stubbed by a bundler, genuinely
@@ -9,3 +9,5 @@ const Unzip = createUnzipClass(readPath);
 
 module.exports = Unzip;
 module.exports.Unzip = Unzip;
+module.exports.zipEntries = zipEntries;
+module.exports.zipEntriesAsync = zipEntriesAsync;

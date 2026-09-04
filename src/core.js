@@ -1,10 +1,9 @@
-const { unzipSync } = require("fflate");
+const { unzipSync, zipSync, strToU8 } = require("fflate");
 
 /**
  * Matches an entry name against the `whatYouNeed` list. Supports string
- * (case-insensitive, matching the original library's behavior — its own
- * examples pass lowercase names against mixed-case real entries like
- * "AndroidManifest.xml"), RegExp, and predicate function.
+ * (case-insensitive, matching the original library's behavior), RegExp,
+ * and predicate function.
  */
 function matchesWhatYouNeed(entryName, whatYouNeed) {
   return whatYouNeed.some((want) => {
@@ -23,33 +22,52 @@ function matchesWhatYouNeed(entryName, whatYouNeed) {
 
 function toOutputBuffer(bytes) {
   // Return a real Buffer in Node (matches the original library's output
-  // shape, so existing consumers doing Buffer-specific things keep working),
-  // a plain Uint8Array in browser environments where Buffer doesn't exist.
+  // shape), a plain Uint8Array in browser environments where Buffer
+  // doesn't exist.
   if (typeof Buffer !== "undefined") {
     return Buffer.from(bytes);
   }
   return bytes;
 }
 
+function toInputBytes(value) {
+  if (typeof value === "string") return strToU8(value);
+  if (value instanceof Uint8Array) return value;
+  if (typeof Buffer !== "undefined" && Buffer.isBuffer(value)) return new Uint8Array(value);
+  if (value instanceof ArrayBuffer) return new Uint8Array(value);
+  throw new TypeError(
+    "Unsupported entry value for zipping — expected a string, Buffer, Uint8Array, or ArrayBuffer."
+  );
+}
+
+// fflate throws plain Errors with no stable .code for malformed/unsupported
+// archives, so we pattern-match the message. Encrypted (password-protected)
+// zip entries are the most common cause a caller hits this — fflate doesn't
+// implement zip encryption at all, so there's no way to support it here
+// short of a different underlying library. We turn the opaque failure into
+// an explicit, documented limitation instead of a confusing stack trace.
+function rethrowWithContext(err) {
+  const message = String((err && err.message) || err);
+  if (/unsupported compression|invalid zip|invalid stored/i.test(message)) {
+    const wrapped = new Error(
+      `${message} — this archive may be password-protected or use a compression method fflate doesn't support. ` +
+        "Encrypted/password-protected zip entries are not supported (fflate has no zip-encryption implementation)."
+    );
+    wrapped.cause = err;
+    throw wrapped;
+  }
+  throw err;
+}
+
 /**
  * Builds the Unzip class, given a `readPath(input)` function that knows how
  * to turn a string input into bytes for the current platform. This is the
- * one seam between platforms: everything else (Buffer/Uint8Array/ArrayBuffer/
- * Blob handling, matching, unzipping) is identical everywhere and lives here,
- * in a file that never references `fs` — so bundlers never see it, rather
- * than seeing it and having to externalize/stub it.
+ * one seam between platforms: everything else lives here, in a file that
+ * never references `fs`.
  *
  * @param {(input: string) => Uint8Array} readPath
  */
 function createUnzipClass(readPath) {
-  /**
-   * Reads `input` into a single Uint8Array, regardless of what shape it came
-   * in as. This is the actual fix over the original isomorphic-unzip: one
-   * code path handles file paths, Buffers, Uint8Arrays, ArrayBuffers, and
-   * browser Blob/File objects, instead of gluing together two separate
-   * libraries (yauzl for Node, zip.js for browser) that never reached
-   * behavioral parity.
-   */
   async function readInputAsBytes(input) {
     if (typeof input === "string") {
       return readPath(input);
@@ -80,8 +98,6 @@ function createUnzipClass(readPath) {
   class Unzip {
     /**
      * @param {string | Buffer | Uint8Array | ArrayBuffer | Blob} input
-     *   Node: a file path (string), or raw bytes (Buffer/Uint8Array/ArrayBuffer).
-     *   Browser: a File or Blob, or raw bytes.
      */
     constructor(input) {
       this.input = input;
@@ -100,18 +116,32 @@ function createUnzipClass(readPath) {
      *
      * @param {(string | RegExp | ((entryName: string) => boolean))[]} whatYouNeed
      * @param {(err: Error | null, buffers?: Record<string, Buffer | Uint8Array>) => void} callback
+     * @param {(entryName: string) => void} [onProgress]
+     *   Optional. Called once per entry as it's matched and decompressed —
+     *   fires by entry, not by byte, since fflate's sync API doesn't expose
+     *   byte-level progress.
      */
-    getBuffer(whatYouNeed, callback) {
+    getBuffer(whatYouNeed, callback, onProgress) {
       this._getBytes()
         .then((bytes) => {
           let unzipped;
           try {
             unzipped = unzipSync(bytes, {
-              filter: (file) => matchesWhatYouNeed(file.name, whatYouNeed),
+              filter: (file) => {
+                const matched = matchesWhatYouNeed(file.name, whatYouNeed);
+                if (matched && typeof onProgress === "function") {
+                  onProgress(file.name);
+                }
+                return matched;
+              },
             });
           } catch (err) {
-            callback(err);
-            return;
+            try {
+              rethrowWithContext(err);
+            } catch (contextualized) {
+              callback(contextualized);
+              return;
+            }
           }
 
           const buffers = {};
@@ -124,33 +154,84 @@ function createUnzipClass(readPath) {
     }
 
     /**
-     * Promise-based equivalent of getBuffer, for callers who'd rather not
-     * deal with the callback style. Not part of the original API, added
-     * since it's the more natural fit for how most code is written today.
+     * Promise-based equivalent of getBuffer.
+     *
+     * @param {(string | RegExp | ((entryName: string) => boolean))[]} whatYouNeed
+     * @param {(entryName: string) => void} [onProgress]
      */
-    getBufferAsync(whatYouNeed) {
+    getBufferAsync(whatYouNeed, onProgress) {
       return new Promise((resolve, reject) => {
-        this.getBuffer(whatYouNeed, (err, buffers) => {
-          if (err) reject(err);
-          else resolve(buffers);
-        });
+        this.getBuffer(
+          whatYouNeed,
+          (err, buffers) => {
+            if (err) reject(err);
+            else resolve(buffers);
+          },
+          onProgress
+        );
       });
     }
 
     /**
-     * Lists every entry name in the archive. The original library only
-     * supported this reliably in Node — here it works identically
-     * everywhere, since both platforms now go through the same
-     * read-then-unzip path.
+     * Lists every entry name in the archive.
      */
     async getEntries() {
       const bytes = await this._getBytes();
-      const unzipped = unzipSync(bytes);
-      return Object.keys(unzipped);
+      try {
+        const unzipped = unzipSync(bytes);
+        return Object.keys(unzipped);
+      } catch (err) {
+        rethrowWithContext(err);
+      }
     }
   }
 
   return Unzip;
 }
 
-module.exports = { createUnzipClass };
+/**
+ * Creates a zip archive from a flat map of entry name -> content.
+ * Not part of the original isomorphic-unzip API (which was extract-only) —
+ * added so this package can also close the loop on simple zip creation.
+ *
+ * @param {Record<string, string | Buffer | Uint8Array | ArrayBuffer>} entries
+ * @param {{ level?: number }} [options] level: 0 (store) to 9 (max). Default fflate behavior (6) if omitted.
+ * @param {(err: Error | null, bytes?: Buffer | Uint8Array) => void} callback
+ */
+function zipEntries(entries, options, callback) {
+  if (typeof options === "function") {
+    callback = options;
+    options = {};
+  }
+  options = options || {};
+
+  try {
+    const input = {};
+    for (const [name, value] of Object.entries(entries)) {
+      const bytes = toInputBytes(value);
+      input[name] = typeof options.level === "number" ? [bytes, { level: options.level }] : bytes;
+    }
+    const zipped = zipSync(input);
+    callback(null, toOutputBuffer(zipped));
+  } catch (err) {
+    callback(err);
+  }
+}
+
+/**
+ * Promise-based equivalent of zipEntries.
+ *
+ * @param {Record<string, string | Buffer | Uint8Array | ArrayBuffer>} entries
+ * @param {{ level?: number }} [options]
+ * @returns {Promise<Buffer | Uint8Array>}
+ */
+function zipEntriesAsync(entries, options) {
+  return new Promise((resolve, reject) => {
+    zipEntries(entries, options, (err, bytes) => {
+      if (err) reject(err);
+      else resolve(bytes);
+    });
+  });
+}
+
+module.exports = { createUnzipClass, zipEntries, zipEntriesAsync };

@@ -1,4 +1,4 @@
-const { createUnzipClass } = require("./core");
+const { createUnzipClass, zipEntries, zipEntriesAsync } = require("./core");
 const { readPath } = require("./platform-node");
 
 const Unzip = createUnzipClass(readPath);
@@ -9,3 +9,5 @@ const Unzip = createUnzipClass(readPath);
 // anyone who prefers `const { Unzip } = require(...)`.
 module.exports = Unzip;
 module.exports.Unzip = Unzip;
+module.exports.zipEntries = zipEntries;
+module.exports.zipEntriesAsync = zipEntriesAsync;

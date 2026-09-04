@@ -101,6 +101,35 @@ unzip.getBuffer([
 const entries = await unzip.getEntries(); // string[]
 ```
 
+### Progress (not in the original)
+
+`getBuffer`/`getBufferAsync` accept an optional `onProgress` callback, called once per matched entry as it's decompressed. This is entry-level progress, not byte-level — fflate's sync API doesn't expose per-byte progress, so this is most useful for archives with many small entries (e.g. reporting "3 of 12 files extracted"), not for tracking a single large file.
+
+```js
+await unzip.getBufferAsync(['AndroidManifest.xml', /^assets\//], (entryName) => {
+  console.log('extracted', entryName);
+});
+```
+
+### Creating a zip (not in the original — this library was extract-only before)
+
+```js
+const { zipEntries, zipEntriesAsync } = require('isomorphic-unzip');
+
+// callback
+zipEntries({ 'hello.txt': 'hello world' }, (err, zipBytes) => { /* ... */ });
+
+// promise, with an optional compression level (0 = store, 9 = max; default 6)
+const zipBytes = await zipEntriesAsync({ 'hello.txt': 'hello world' }, { level: 9 });
+```
+
+Entry values can be a `string`, `Buffer`, `Uint8Array`, or `ArrayBuffer`.
+
+### Limitations
+
+- **No password-protected/encrypted zip support.** `fflate` doesn't implement zip encryption, so encrypted entries can't be read. If `getBuffer`/`getEntries` hits one, the error message says so explicitly instead of surfacing a raw fflate parse error.
+- **No streaming for very large archives.** Extraction is fully in-memory (`unzipSync` under the hood) — fine for typical APK/IPA-sized archives, but not intended for multi-gigabyte zips.
+
 ---
 
 ## Design notes
