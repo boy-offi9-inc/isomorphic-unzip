@@ -213,3 +213,123 @@ test("src/unzip.js dead file was removed (only src/core.js implements Unzip)", (
   const path = require("path");
   assert.equal(fs.existsSync(path.join(__dirname, "..", "src", "unzip.js")), false);
 });
+
+test("Unzip.extractStream emits matched entries in chunks from an in-memory Buffer", async () => {
+  const zipBytes = makeTestZip();
+  const unzip = new Unzip(zipBytes);
+
+  const entries = [];
+  const collected = {};
+
+  await unzip.extractStream([/^assets\//, "resources.arsc"], {
+    onEntry(name) {
+      entries.push(name);
+      collected[name] = [];
+    },
+    onData(name, chunk) {
+      collected[name].push(chunk);
+    },
+  });
+
+  assert.deepEqual(entries.sort(), ["assets/data.json", "resources.arsc"].sort());
+  assert.equal(Buffer.concat(collected["assets/data.json"]).toString(), '{"hello":"world"}');
+  assert.equal(Buffer.concat(collected["resources.arsc"]).toString(), "fake resources binary");
+});
+
+test("Unzip.extractStream true-streams from a file path (fs.createReadStream), not a full read", async () => {
+  const zipBytes = makeTestZip();
+  const tmpFile = path.join(os.tmpdir(), `iu-stream-test-${Date.now()}.zip`);
+  fs.writeFileSync(tmpFile, zipBytes);
+
+  try {
+    const unzip = new Unzip(tmpFile);
+    const chunks = [];
+    await unzip.extractStream(["AndroidManifest.xml"], {
+      onData(name, chunk, isLast) {
+        chunks.push(chunk);
+        if (isLast) {
+          assert.equal(Buffer.concat(chunks).toString(), "<manifest>fake manifest content</manifest>");
+        }
+      },
+    });
+    assert.ok(chunks.length > 0);
+  } finally {
+    fs.unlinkSync(tmpFile);
+  }
+});
+
+test("Unzip.extractStream calls onEnd once all matched entries finish", async () => {
+  const zipBytes = makeTestZip();
+  const unzip = new Unzip(zipBytes);
+  let ended = false;
+  let entriesFinished = 0;
+
+  await unzip.extractStream([/^META-INF\//, "resources.arsc"], {
+    onData(name, chunk, isLast) {
+      if (isLast) entriesFinished++;
+    },
+    onEnd() {
+      ended = true;
+      assert.equal(entriesFinished, 2, "onEnd should fire only after all matched entries are done");
+    },
+  });
+
+  assert.ok(ended);
+});
+
+test("extractToDir writes matched entries to disk and returns their paths", async () => {
+  const { extractToDir } = require("../src/index");
+  const zipBytes = makeTestZip();
+  const unzip = new Unzip(zipBytes);
+  const destDir = fs.mkdtempSync(path.join(os.tmpdir(), "iu-extract-"));
+
+  try {
+    const written = await extractToDir(unzip, ["AndroidManifest.xml", /^assets\//], destDir);
+    assert.equal(written.length, 2);
+
+    const manifestPath = path.join(destDir, "AndroidManifest.xml");
+    const dataPath = path.join(destDir, "assets", "data.json");
+    assert.equal(fs.readFileSync(manifestPath, "utf8"), "<manifest>fake manifest content</manifest>");
+    assert.equal(fs.readFileSync(dataPath, "utf8"), '{"hello":"world"}');
+  } finally {
+    fs.rmSync(destDir, { recursive: true, force: true });
+  }
+});
+
+test("extractToDir refuses zip-slip entries (names that escape destDir)", async () => {
+  const { extractToDir, zipEntriesAsync } = require("../src/index");
+
+  // A hand-crafted "malicious" entry name — fflate will happily zip whatever
+  // string key we give it, same as any zip tool would.
+  const maliciousZip = await zipEntriesAsync({
+    "../../evil.txt": "should never be written outside destDir",
+  });
+  const unzip = new Unzip(maliciousZip);
+  const destDir = fs.mkdtempSync(path.join(os.tmpdir(), "iu-slip-"));
+
+  try {
+    await assert.rejects(
+      () => extractToDir(unzip, ["../../evil.txt"], destDir),
+      /zip-slip|resolves outside/
+    );
+    // Confirm nothing leaked outside destDir.
+    const escapedPath = path.resolve(destDir, "..", "..", "evil.txt");
+    assert.equal(fs.existsSync(escapedPath), false);
+  } finally {
+    fs.rmSync(destDir, { recursive: true, force: true });
+  }
+});
+
+test("extractToDir is not exported from the browser entry point", () => {
+  const UnzipBrowser = require("../src/index.browser");
+  assert.equal(UnzipBrowser.extractToDir, undefined);
+});
+
+test("browser streamInput rejects a Node file-path string with a clear error", async () => {
+  const UnzipBrowser = require("../src/index.browser");
+  const unzip = new UnzipBrowser("/some/path.zip");
+  await assert.rejects(
+    () => unzip.extractStream(["anything"], {}),
+    /isn't available in browser environments/
+  );
+});

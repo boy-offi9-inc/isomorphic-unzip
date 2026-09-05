@@ -125,10 +125,42 @@ const zipBytes = await zipEntriesAsync({ 'hello.txt': 'hello world' }, { level: 
 
 Entry values can be a `string`, `Buffer`, `Uint8Array`, or `ArrayBuffer`.
 
+### Streaming large archives (not in the original)
+
+`getBuffer`/`getBufferAsync` load matched entries fully into memory. For large archives (or large individual entries — think APK/IPA-sized), `extractStream` processes the source in chunks and hands you each matched entry's data incrementally instead:
+
+```js
+await unzip.extractStream(['AndroidManifest.xml', /^assets\//], {
+  onEntry(name) {
+    console.log('starting', name);
+  },
+  onData(name, chunk, isLast) {
+    // handle this chunk — write it, pipe it, whatever
+  },
+  onEnd() {
+    console.log('done');
+  },
+});
+```
+
+Memory behavior depends on what you constructed `Unzip` with:
+- **File path (Node) or Blob/File (browser):** true streaming — the source itself is read in bounded chunks (`fs.createReadStream` / `Blob.stream()`), so memory use doesn't scale with archive size.
+- **Buffer/Uint8Array/ArrayBuffer:** the source is already fully in memory (you loaded it that way), but decompressed entries are still emitted incrementally via `onData` rather than all buffered into one returned object.
+
+**`extractToDir` (Node only)** builds on `extractStream` to write matched entries straight to disk, without ever holding their contents as Buffers:
+
+```js
+const { extractToDir } = require('isomorphic-unzip');
+
+const written = await extractToDir(unzip, [/^assets\//], './out');
+// written: string[] — full paths of everything extracted
+```
+
+It rejects entry names that would resolve outside the destination directory (zip-slip protection) — a zip's entry names are attacker-controllable data, and nothing in the zip format stops a name like `../../etc/passwd`. `extractToDir` isn't exported from the browser entry point, since writing to a real filesystem is inherently a Node concern.
+
 ### Limitations
 
-- **No password-protected/encrypted zip support.** `fflate` doesn't implement zip encryption, so encrypted entries can't be read. If `getBuffer`/`getEntries` hits one, the error message says so explicitly instead of surfacing a raw fflate parse error.
-- **No streaming for very large archives.** Extraction is fully in-memory (`unzipSync` under the hood) — fine for typical APK/IPA-sized archives, but not intended for multi-gigabyte zips.
+- **No password-protected/encrypted zip support.** `fflate` doesn't implement zip encryption, so encrypted entries can't be read. If `getBuffer`/`getEntries`/`extractStream` hits one, the error message says so explicitly instead of surfacing a raw fflate parse error.
 
 ---
 

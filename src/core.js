@@ -1,24 +1,6 @@
 const { unzipSync, zipSync, strToU8 } = require("fflate");
-
-/**
- * Matches an entry name against the `whatYouNeed` list. Supports string
- * (case-insensitive, matching the original library's behavior), RegExp,
- * and predicate function.
- */
-function matchesWhatYouNeed(entryName, whatYouNeed) {
-  return whatYouNeed.some((want) => {
-    if (typeof want === "string") {
-      return entryName.toLowerCase() === want.toLowerCase();
-    }
-    if (want instanceof RegExp) {
-      return want.test(entryName);
-    }
-    if (typeof want === "function") {
-      return want(entryName) === true;
-    }
-    return false;
-  });
-}
+const { matchesWhatYouNeed } = require("./match");
+const { streamExtract, chunkBytes } = require("./stream");
 
 function toOutputBuffer(bytes) {
   // Return a real Buffer in Node (matches the original library's output
@@ -60,14 +42,22 @@ function rethrowWithContext(err) {
 }
 
 /**
- * Builds the Unzip class, given a `readPath(input)` function that knows how
- * to turn a string input into bytes for the current platform. This is the
- * one seam between platforms: everything else lives here, in a file that
- * never references `fs`.
+ * Builds the Unzip class, given platform-specific helpers:
+ * - `readPath(input)`: turns a string input into bytes, fully in memory.
+ * - `streamInput(input, chunkSize)`: turns a string (Node) or Blob (browser)
+ *   input into an async iterable of chunks, for extractStream. Throws a
+ *   clear error if called with an input the current platform can't stream
+ *   (e.g. a Blob in Node, a path in the browser).
+ *
+ * This is the one seam between platforms: everything else (Buffer/Uint8Array/
+ * ArrayBuffer/Blob handling, matching, unzipping) is identical everywhere and
+ * lives here, in a file that never references `fs` — so bundlers never see
+ * it, rather than seeing it and having to externalize/stub it.
  *
  * @param {(input: string) => Uint8Array} readPath
+ * @param {(input: string | Blob, chunkSize: number) => AsyncIterable<Uint8Array>} streamInput
  */
-function createUnzipClass(readPath) {
+function createUnzipClass(readPath, streamInput) {
   async function readInputAsBytes(input) {
     if (typeof input === "string") {
       return readPath(input);
@@ -183,6 +173,40 @@ function createUnzipClass(readPath) {
       } catch (err) {
         rethrowWithContext(err);
       }
+    }
+
+    /**
+     * Streams matched entries out of the archive without loading the whole
+     * archive or the whole set of decompressed outputs into memory at once.
+     *
+     * True bounded-memory streaming applies when the constructor input was a
+     * file path (Node) or a Blob/File (browser) — those are read chunk by
+     * chunk via streamInput. For Buffer/Uint8Array/ArrayBuffer input, the
+     * compressed source is already fully resident in memory (the caller
+     * loaded it that way), but decompressed entries are still emitted
+     * incrementally via onData rather than buffered into one returned
+     * object — so extracting many/large entries still avoids holding them
+     * all at once.
+     *
+     * @param {(string | RegExp | ((entryName: string) => boolean))[]} whatYouNeed
+     * @param {{
+     *   onEntry?: (entryName: string) => void,
+     *   onData?: (entryName: string, chunk: Uint8Array, isLast: boolean) => void,
+     *   onEnd?: () => void,
+     * }} handlers
+     * @param {{ chunkSize?: number }} [options] chunkSize defaults to 1 MiB.
+     * @returns {Promise<void>}
+     */
+    async extractStream(whatYouNeed, handlers, options = {}) {
+      const chunkSize = options.chunkSize || 1 << 20;
+      const canTrueStream =
+        typeof this.input === "string" || (typeof Blob !== "undefined" && this.input instanceof Blob);
+
+      const chunks = canTrueStream
+        ? streamInput(this.input, chunkSize)
+        : chunkBytes(await this._getBytes(), chunkSize);
+
+      return streamExtract(chunks, whatYouNeed, handlers);
     }
   }
 

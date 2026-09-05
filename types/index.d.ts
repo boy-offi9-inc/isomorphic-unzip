@@ -9,6 +9,17 @@ export type UnzipCallback = (
 
 export type OnProgress = (entryName: string) => void;
 
+export interface ExtractStreamHandlers {
+  onEntry?: (entryName: string) => void;
+  onData?: (entryName: string, chunk: Uint8Array, isLast: boolean) => void;
+  onEnd?: () => void;
+}
+
+export interface ExtractStreamOptions {
+  /** Bytes per chunk when reading the source. Defaults to 1 MiB. */
+  chunkSize?: number;
+}
+
 export class Unzip {
   constructor(input: UnzipInput);
   getBuffer(whatYouNeed: WhatYouNeed, callback: UnzipCallback, onProgress?: OnProgress): void;
@@ -17,7 +28,24 @@ export class Unzip {
     onProgress?: OnProgress
   ): Promise<Record<string, Buffer | Uint8Array>>;
   getEntries(): Promise<string[]>;
+  extractStream(
+    whatYouNeed: WhatYouNeed,
+    handlers: ExtractStreamHandlers,
+    options?: ExtractStreamOptions
+  ): Promise<void>;
 }
+
+export interface ExtractToDirOptions {
+  onEntry?: (entryName: string, outPath: string) => void;
+}
+
+/** Node-only — not exported from the browser entry point. */
+export function extractToDir(
+  unzip: Unzip,
+  whatYouNeed: WhatYouNeed,
+  destDir: string,
+  options?: ExtractToDirOptions
+): Promise<string[]>;
 
 export type ZipEntryValue = string | Buffer | Uint8Array | ArrayBuffer;
 
@@ -46,5 +74,6 @@ export function zipEntriesAsync(
 declare const _default: typeof Unzip & {
   zipEntries: typeof zipEntries;
   zipEntriesAsync: typeof zipEntriesAsync;
+  extractToDir: typeof extractToDir;
 };
 export default _default;
